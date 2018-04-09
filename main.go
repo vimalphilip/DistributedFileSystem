@@ -6,28 +6,27 @@ import (
 	"encoding/gob"
 	"fmt"
 	"log"
-	"time"
-	"os"
 	"net"
+	"os"
 	"sort"
-	"sync"
 	"strings"
+	"sync"
+	"time"
 )
 
 //Declare constants
-const INTRODUCER = "172.31.36.139/20"		//IP Address of the introducer 
-const FILE_PATH = "MembershipList.txt"		//File path of membership list
-const MAX_TIME = time.Millisecond * 2500	//Max time a VM has to wait for the Syn/Ack message
-const MIN_HOSTS = 4						//Minimum number of VM's in the group before Syn/Ack begins
+const INTRODUCER = "172.31.22.202/20"    //IP Address of the introducer
+const FILE_PATH = "MembershipList.txt"   //File path of membership list
+const MAX_TIME = time.Millisecond * 2500 //Max time a VM has to wait for the Syn/Ack message
+const MIN_HOSTS = 4                      //Minimum number of VM's in the group before Syn/Ack begins
 
-
-var currHost string    						//	IP of the local machine
-var isConnected int 						//  1(Connected) or 0(Not connected) -> Boolean value to check if machine is currently connected to the group
-var membershipList = make([]member, 0)		//Contains all members connected to the group
-
+var currHost string                    //	IP of the local machine
+var isConnected int                    //  1(Connected) or 0(Not connected) -> Boolean value to check if machine is currently connected to the group
+var membershipList = make([]member, 0) //Contains all members connected to the group
 
 //We need 2 timers to keep track of the connected nodes
 var timers [3]*time.Timer
+
 //We also need 2 flags to keep track of nodes voluntarily leaving or crashed
 //1 = timers were forcefully stopped
 var resetFlags [3]int
@@ -40,25 +39,25 @@ var mutex = &sync.Mutex{}
 
 //Message object passed b/w client and server
 type message struct {
-	Host string
-	Status string
-	Timestamp string
+	Host             string
+	Status           string
+	Timestamp        string
+	File_Information file_information
 }
 
 //Information kept for each VM in the group stored in membership list
 type member struct {
-	Host string
+	Host      string
 	Timestamp string
 }
 
 //type and functions used to sort membershipLists
 type memList []member
+
 //TODO functions to sort the membershipList
 func (slice memList) Len() int           { return len(slice) }
 func (slice memList) Less(i, j int) bool { return slice[i].Host < slice[j].Host }
 func (slice memList) Swap(i, j int)      { slice[i], slice[j] = slice[j], slice[i] }
-
-	
 
 //Log files for error and info logging
 var logfile *os.File
@@ -73,21 +72,22 @@ const PACKET_LOSS = 0
 
 var packets_lost int
 
-func main(){
-	
+func main() {
+
 	//setup and initialize starting variables
 	setupAndInitialize()
-	//start all the VM's to receive connections and messages from 1) Connected VM's 2) Introducer when new VM's join 
-	
+	//start all the VM's to receive connections and messages from 1) Connected VM's 2) Introducer when new VM's join
+	// 3) File Meta Data Server
 	//1)
 	go messageServer()
 	//2)
 	go introducerMachineServer()
-
+	//3)
+	go metaDataServer()
 
 	//Reader to take console input from the user
 	reader := bufio.NewReader(os.Stdin)
-	
+
 	//Check if the VM is the introducer
 	if currHost == INTRODUCER {
 		//If membershipList file exists, check if user wants to restart server using
@@ -102,7 +102,7 @@ func main(){
 			switch input {
 			case "y\n":
 				infoCheck("Restarting master...")
-				fileToML() 			//convert the file in the directory to membershipList 
+				fileToML() //convert the file in the directory to membershipList
 				checkMLValid()
 				checkValidFlags()
 				writeMLtoFile()
@@ -114,21 +114,20 @@ func main(){
 			}
 		}
 	}
-	
+
 	// start sending sync functions and check for acks in seperate threads
 	go sendSyn()
 	go checkLastAck(1)
 	go checkLastAck(2)
 	go checkLastAck(3)
-	
-	
+
 	//Take inputs from the console on what to do?
-	//4 options 
+	//4 options
 	// 1. Print the membershiplist
 	// 2. Show this machine's IP address
 	// 3. Join the group
 	// 4. Leave the group
-	
+
 	for {
 		fmt.Println("1 -> Print membership list")
 		fmt.Println("2 -> Show IP address of this host")
@@ -139,21 +138,21 @@ func main(){
 		fmt.Println("7 -> Get the file (get [sdfsfilename])")
 		fmt.Println("8 -> Delete the file (delete [sdfsfilename])")
 		fmt.Println("9 -> List the files (ls [sdfsfilename])")
-		fmt.Println("10 -> store")
+		fmt.Println("10 -> Store the file in local file system")
 		input, _ := reader.ReadString('\n')
 		switch input {
 		case "1\n":
 			if isConnected == 1 || currHost == INTRODUCER {
-					for _, element := range membershipList {
-				fmt.Println(element)
-					}
+				for _, element := range membershipList {
+					fmt.Println(element)
+				}
 			} else {
 				fmt.Println("You are currently not connected to the group. Only nodes part of the group can see the membership list")
 			}
 		case "2\n":
 			fmt.Println(currHost)
 		case "3\n":
-			if currHost != INTRODUCER  {
+			if currHost != INTRODUCER {
 				if isConnected == 0 {
 					fmt.Println("Joining group")
 					connectToIntroducer()
@@ -177,126 +176,180 @@ func main(){
 			}
 		case "5\n":
 			fmt.Println("Enter the grep string/regular-expression. Sample syntax < -c abcd >  \n")
-			input, _ := reader.ReadString('\n')	
+			input, _ := reader.ReadString('\n')
 			go grepClient(input)
 		case "6\n":
-			fmt.Println("Local path?")
+			fmt.Println("Enter the Local path of the File")
 			local_path, _ := reader.ReadString('\n')
 			local_path = strings.TrimRight(local_path, "\n")
-			fmt.Println("DFS name?")
-			sdfs_name, _ := reader.ReadString('\n')
-			sdfs_name = strings.TrimRight(sdfs_name, "\n")
-			// call store_file(local_path, sdfs_name) create this method	
+			fmt.Println("Enter the DFS FileName:")
+			dfsName, _ := reader.ReadString('\n')
+			dfsName = strings.TrimRight(dfsName, "\n")
+			storeFile(local_path, dfsName)
 		default:
 			fmt.Println("Invalid command")
 		}
 		fmt.Println("\n\n")
 	}
 }
-	
-	
 
-
-func messageServer(){
+func messageServer() {
 	// We need to implement UDP to make it light weight for the heartbeat messages
 	serverAddress, err := net.ResolveUDPAddr("udp", ":8010")
 	errorCheck(err)
 	serverConn, err := net.ListenUDP("udp", serverAddress)
 	errorCheck(err)
-	
-	defer serverConn.Close()
-	
-	buf := make([]byte, 1024)
-	
-	for {
-			// Constantly Listening
-			msg := message{}
-			n, _, err := serverConn.ReadFromUDP(buf)
-			errorCheck(err)
-			gob.NewDecoder(bytes.NewReader(buf[:n])).Decode(&msg)
-			
-			//Different cases 
-			switch msg.Status {
-				case "Joining":
-						node := member{msg.Host, time.Now().Format(time.RFC850)}  //TODO check time format
-						//todo check all conditions and if ok append to the membership list
-						if checkTimeStamp(node) == 0 {
-							mutex.Lock()
-							resetTimers()
-							membershipList = append(membershipList, node)
-							sort.Sort(memList(membershipList))
-							mutex.Unlock()							
-						}					
-						//check the possible conditions and if all good write to File. Also check error conditions
-						go writeMLtoFile();
-						sendList()
-				case "Leaving":
-						mutex.Lock()
-						resetTimers()
-						propagateMsg(msg)
-						mutex.Unlock()	
-				case "SYN":
-						infoCheck("Syn received from: "+msg.Host)
-						sendAck(msg.Host)
-				/*	if ack, check if ip that sent the message is either (currIndex + 1)%N or (currIndex + 2)%N or (currIndex + 2)%N
-					and reset the corresponding timer to MAX_TIME*/
-				case "ACK":
-						if msg.Host == membershipList[(getIndex()+1)%len(membershipList)].Host {
-							infoCheck("ACK received from "+msg.Host)
-							timers[0].Reset(MAX_TIME)
-						} else if msg.Host == membershipList[(getIndex()+2)%len(membershipList)].Host {
-							infoCheck("ACK received from "+msg.Host)
-							timers[1].Reset(MAX_TIME)
-						} else if msg.Host == membershipList[(getIndex()+3)%len(membershipList)].Host {
-							infoCheck("ACK received from "+msg.Host)
-							timers[2].Reset(MAX_TIME)
-						}
-						//if message status is failed, propagate the message (timers will be taken care of in checkLastAck
-				case "Failed":
-						//resetTimers taken care in checkLastAck
-						mutex.Lock()
-						propagateMsg(msg)  //Ideally the logic executed should be same as leaving 
-						mutex.Unlock()
-				case "isAlive":
-						iamAlive()
-						/*	received by introducer. valid flags will initially contain an array of 0's corresponding to each member
-							in the membershipList. The value will be updated to 1 if an iamAlive is received from the corresponding VM */
-				case "iamAlive":
-						for i, element := range membershipList {
-							if msg.Host == element.Host {
-								validFlags[i] = 1
-									break
-								}
-							}
 
-		
+	defer serverConn.Close()
+
+	buf := make([]byte, 1024)
+
+	for {
+		// Constantly Listening
+		msg := message{}
+		n, _, err := serverConn.ReadFromUDP(buf)
+		errorCheck(err)
+		gob.NewDecoder(bytes.NewReader(buf[:n])).Decode(&msg)
+
+		//Different cases
+		switch msg.Status {
+		case "Joining":
+			node := member{msg.Host, time.Now().Format(time.RFC850)} //TODO check time format
+			//todo check all conditions and if ok append to the membership list
+			if checkTimeStamp(node) == 0 {
+				mutex.Lock()
+				resetTimers()
+				membershipList = append(membershipList, node)
+				sort.Sort(memList(membershipList))
+				mutex.Unlock()
 			}
+			//check the possible conditions and if all good write to File. Also check error conditions
+			go writeMLtoFile()
+			sendList()
+			sendFileMetaData()
+		case "Leaving":
+		//TODO check introducer is the node which left, if so choose a new introducer
+			mutex.Lock()
+			resetTimers()
+			propagateMsg(msg)
+			mutex.Unlock()
+		case "SYN":
+			infoCheck("Syn received from: " + msg.Host)
+			sendAck(msg.Host)
+		/*	if ack, check if ip that sent the message is either (currIndex + 1)%N or (currIndex + 2)%N or (currIndex + 2)%N
+			and reset the corresponding timer to MAX_TIME*/
+		case "ACK":
+			if msg.Host == membershipList[(getIndex(currHost)+1)%len(membershipList)].Host {
+				infoCheck("ACK received from " + msg.Host)
+				timers[0].Reset(MAX_TIME)
+			} else if msg.Host == membershipList[(getIndex(currHost)+2)%len(membershipList)].Host {
+				infoCheck("ACK received from " + msg.Host)
+				timers[1].Reset(MAX_TIME)
+			} else if msg.Host == membershipList[(getIndex(currHost)+3)%len(membershipList)].Host {
+				infoCheck("ACK received from " + msg.Host)
+				timers[2].Reset(MAX_TIME)
+			}
+			//if message status is failed, propagate the message (timers will be taken care of in checkLastAck
+		case "Failed":
+			//resetTimers taken care in checkLastAck
+			//TODO check introducer is the node which left, if so choose a new introducer
+			mutex.Lock()
+			propagateMsg(msg) //Ideally the logic executed should be same as leaving
+			mutex.Unlock()
+		case "isAlive":
+			iamAlive()
+			/*	received by introducer. valid flags will initially contain an array of 0's corresponding to each member
+				in the membershipList. The value will be updated to 1 if an iamAlive is received from the corresponding VM */
+		case "iamAlive":
+			for i, element := range membershipList {
+				if msg.Host == element.Host {
+					validFlags[i] = 1
+					break
+				}
+			}
+
+		/*	received only by introducer. sent when a process wants to add a file to the sdfs. introducer first checks
+			if file exists. If it does, the introducer replies with a 'file exists' message as to not overwrite data.
+			Else, introducer adds file to the sdfs, adds the file to file_ips, adds the vm that sent the 'addfile' message
+			to file_ips, replicates the file in the subsequent 3 processes in the membership list, and adds those 3 processes
+			to the file_ips list as well.*/
+		case "AddFile":
+			if _, exists := file_list[msg.File_Information.FileName]; exists {
+				go sendFileExists(msg)
+			} else {
+				ip_dest1 := membershipList[(getIndex(msg.Host)+1)%len(membershipList)].Host
+				ip_dest2 := membershipList[(getIndex(msg.Host)+2)%len(membershipList)].Host
+				ip_dest3 := membershipList[(getIndex(msg.Host)+3)%len(membershipList)].Host
+				go sendFile(msg.Host, ip_dest1, msg.File_Information.FileName)
+				go sendFile(msg.Host, ip_dest2, msg.File_Information.FileName)
+				go sendFile(msg.Host, ip_dest3, msg.File_Information.FileName)
+
+				file_ips := make([]string, 0)
+				file_ips = append(file_ips, msg.Host)
+				file_ips = append(file_ips, ip_dest1)
+				file_ips = append(file_ips, ip_dest2)
+				file_ips = append(file_ips, ip_dest3)
+				info := file_information{msg.File_Information.FileName, file_ips, msg.File_Information.Size}
+				file_list[msg.File_Information.FileName] = info
+				sendFileMetaData()
+
+				message := message{currHost, "FileSent", time.Now().Format(time.RFC850), info}
+				var targetHosts = make([]string, 3)
+				targetHosts[0] = ip_dest1
+				targetHosts[1] = ip_dest2
+				targetHosts[2] = ip_dest3
+
+				sendMsg(message, targetHosts)
+			}
+			
+		/*Received when a file was scp'ed and is the local file list needs to be updated. Checks first to see if file
+		already exists in local file list. If it does, do nothing. Else, add it to the list*/	
+		case "FileSent":
+			exists := false
+			for _, file := range local_files {
+				if file == msg.File_Information.FileName {
+					exists = true
+					break
+				}
+			}
+			if !exists {
+				local_files = append(local_files, msg.File_Information.FileName)
+				infoCheck("file " + msg.File_Information.FileName + " added to " + currHost)
+			}
+		case "FileExists":
+			removeFile(msg.File_Info.Name)
+		/*	Received when a file was scp'ed and is the local file list needs to be updated. Checks first to see if file
+			already exists in local file list. If it does, do nothing. Else, add it to the list*/		
+		case "FileDoesntExist":
+			fmt.Println("File does not exist")
+			infoCheck("file " + msg.File_Info.Name + " doesn't exist")			
+		
+		}
 	}
-	
-	
+
 }
 
 func introducerMachineServer() {
 	//Listens to messages from introducer
-	
+
 	serverAddress, err := net.ResolveUDPAddr("udp", ":8011")
 	errorCheck(err)
 	serverConn, err := net.ListenUDP("udp", serverAddress)
 	errorCheck(err)
-	
+
 	defer serverConn.Close()
-	
+
 	buf := make([]byte, 1024)
-	
+
 	for {
-		// Constantly Listening 
+		// Constantly Listening
 		mList := make([]member, 0)
 		n, _, err := serverConn.ReadFromUDP(buf)
 		err = gob.NewDecoder(bytes.NewReader(buf[:n])).Decode(&mList)
 		errorCheck(err)
 
 		//restart timers if membershipList is updated
-		mutex.Lock()	
+		mutex.Lock()
 		resetTimers()
 		membershipList = mList
 		mutex.Unlock()
@@ -334,9 +387,8 @@ func checkLastAck(relativeIndex int) {
 	}
 
 	//Get host at (currIndex + relativeIndex)%N
-	host := membershipList[(getIndex()+relativeIndex)%len(membershipList)].Host
-	infoCheck("Checking "+string(relativeIndex)+ ": "+host )
-	
+	host := membershipList[(getIndex(currHost)+relativeIndex)%len(membershipList)].Host
+	infoCheck("Checking " + string(relativeIndex) + ": " + host)
 
 	//Create a new timer and hold until timer reaches 0 or is reset
 	timers[relativeIndex-1] = time.NewTimer(MAX_TIME)
@@ -350,7 +402,7 @@ func checkLastAck(relativeIndex int) {
 		checkLastack needs to reset the VM it is monitoring.*/
 	mutex.Lock()
 	if len(membershipList) >= MIN_HOSTS && getRelativeIndex(host) == relativeIndex && resetFlags[relativeIndex-1] != 1 {
-		msg := message{membershipList[(getIndex()+relativeIndex)%len(membershipList)].Host, "Failed", time.Now().Format(time.RFC850)}
+		msg := message{membershipList[(getIndex(currHost)+relativeIndex)%len(membershipList)].Host, "Failed", time.Now().Format(time.RFC850), file_information{"", nil, 0}}
 		fmt.Print("Failure detected: ")
 		fmt.Println(msg.Host)
 		failureCheck("Failure detected: " + msg.Host)
@@ -359,11 +411,11 @@ func checkLastAck(relativeIndex int) {
 	}
 	//If a failure is detected for one timer, reset the other as well.
 	if resetFlags[relativeIndex-1] == 0 {
-		infoCheck("Force stopping timer "+string(relativeIndex))
+		infoCheck("Force stopping timer " + string(relativeIndex))
 		resetFlags[relativeIndex%2] = 1
 		timers[relativeIndex%2].Reset(0)
 		resetFlags[relativeIndex%3] = 1
-		timers[relativeIndex%3].Reset(0) 
+		timers[relativeIndex%3].Reset(0)
 	} else {
 		resetFlags[relativeIndex-1] = 0
 	}
@@ -371,5 +423,4 @@ func checkLastAck(relativeIndex int) {
 	mutex.Unlock()
 	go checkLastAck(relativeIndex)
 
-}	
-
+}

@@ -65,7 +65,7 @@ func checkMLValid(){
 	errorCheck(err)
 
 	for index, element := range membershipList {
-		msg := message{currHost, "isAlive", time.Now().Format(time.RFC850)}
+		msg := message{currHost, "isAlive", time.Now().Format(time.RFC850),file_information{"",nil,0}}
 		var buf bytes.Buffer
 		if err := gob.NewEncoder(&buf).Encode(msg); err != nil {
 			errorCheck(err)

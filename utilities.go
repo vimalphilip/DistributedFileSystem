@@ -35,9 +35,9 @@ func updateML(hostIndex int, msg message) int {
 }
 
 //get index for local VM in membershipList
-func getIndex() int {
+func getIndex(ip string) int {
 	for i, element := range membershipList {
-		if currHost == element.Host {
+		if ip == element.Host {
 			return i
 		}
 	}
@@ -129,7 +129,7 @@ func getIP() string {
 /*Takes the host for a member and checks its index with the index for the local VM. Returns 1 if
 host is (localIndex + 1)%N or 2 if host is (localIndex + 2)%N, where N is size of membershipList*/
 func getRelativeIndex(host string) int {
-	localIndex := getIndex()
+	localIndex := getIndex(currHost)
 	if strings.Compare(membershipList[(localIndex+1)%len(membershipList)].Host, host) == 0 {
 		return 1
 	} else if strings.Compare(membershipList[(localIndex+2)%len(membershipList)].Host, host) == 0 {
@@ -139,3 +139,4 @@ func getRelativeIndex(host string) int {
 	}	
 	return -1
 }
+
