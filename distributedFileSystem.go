@@ -8,6 +8,7 @@ import (
 		"net"
 		"bytes"
 		"encoding/gob"
+		"strings"
 )
 
 // Make a structure to store file info: name, VMs it's replicated on, and size
@@ -37,7 +38,7 @@ func storeFile(localPath string, dfsName string) {
 	if check_if_exists(dfsName) == 1 {
 		return
 	}
-	_, err := exec.Command("cp", localPath, "location"+dfsName).Output()
+	_, err := exec.Command("cp", localPath, "/home/ec2-user/distributedFileSystem/files/"+dfsName).Output()
 	errorCheck(err)
 	if err != nil {
 		fmt.Println("Local file does not exist")
@@ -132,7 +133,7 @@ func check_if_exists(dfsName string) int {
 
 /*helper function to remove file from local sdfs file directory and update local_files list*/
 func removeFile(dfsName string) {
-	_, err := exec.Command("rm", "location"+dfsName).Output()
+	_, err := exec.Command("rm", "/home/ec2-user/distributedFileSystem/files/"+dfsName).Output()
 	errorCheck(err)
 
 	for index, element := range local_files {
@@ -182,7 +183,12 @@ func sendFile(ip_src string, ip_dest string, dfsName string) {
 	IP_src, _, _ := net.ParseCIDR(ip_src)
 	IP_dest, _, _ := net.ParseCIDR(ip_dest)
 	infoCheck("scp" +"-i /home/ec2-user/dGrep/distributed9.pem"+ "-3"+ " ec2-user@" + IP_src.String() + ":/home/ec2-user/distributedFileSystem/files/" + dfsName + " ec2-user@" + IP_dest.String() + ":/home/ec2/distributedFileSystem/files")
-	_, err := exec.Command("scp","-i /home/ec2-user/dGrep/distributed9.pem", "-3", "ec2-user@"+IP_src.String()+":/home/ec2-user/distributedFileSystem/files/"+dfsName, "ec2-user@"+IP_dest.String()+":/home/ec2-user/distributedFileSystem/files").Output()
+	cmd := exec.Command("scp", "-i /home/ec2-user/dGrep/distributed9.pem","-o StrictHostKeyChecking=no", "-o UserKnownHostsFile=/dev/null", "-3", "ec2-user@"+IP_src.String()+":/home/ec2-user/distributedFileSystem/files/"+dfsName, "ec2-user@"+IP_dest.String()+":/home/ec2-user/distributedFileSystem/files")
+	fmt.Println("Command executed: "+ strings.Join(cmd.Args, " "))
+	output, err :=cmd.CombinedOutput()
+	if err != nil {
+    fmt.Println(fmt.Sprint(err) + ": " + string(output))
+	}
 	errorCheck(err)
 }
 
@@ -317,3 +323,21 @@ func sendFileExists(msg message) {
 
 	sendMsg(msg, targetHosts)
 }
+
+/*Function to print the ips of all machines in which the file is replicated given its dfs name. If the machine
+is the introducer, it checks its file_list and prints the ips. Else, the machine sends a 'getFileLocations'
+message to the introducer*/
+func getFileLocations(dfsName string) {
+	if currHost != INTRODUCER {
+		msg := message{currHost, "getFileLocations", time.Now().Format(time.RFC850), file_information{dfsName, nil, 0}}
+		var targetHosts = make([]string, 1)
+		targetHosts[0] = INTRODUCER
+		sendMsg(msg, targetHosts)
+	} else {
+		for _, element := range file_list[dfsName].ReplicatedIPs {
+			fmt.Println(element)
+		}
+	}
+
+}
+

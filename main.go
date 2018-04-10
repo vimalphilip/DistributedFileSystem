@@ -134,10 +134,10 @@ func main() {
 		fmt.Println("3 -> Join group")
 		fmt.Println("4 -> Leave group")
 		fmt.Println("5 -> Distributed Grep\n")
-		fmt.Println("6 -> Put the file (put [localfilename] [sdfsfilename])")
-		fmt.Println("7 -> Get the file (get [sdfsfilename])")
-		fmt.Println("8 -> Delete the file (delete [sdfsfilename])")
-		fmt.Println("9 -> List the files (ls [sdfsfilename])")
+		fmt.Println("6 -> Store the file in DFS ([localfilename] [dfsfilename])")
+		fmt.Println("7 -> Get the file (get [dfsfilename])")
+		fmt.Println("8 -> Delete the file (delete [dfsfilename])")
+		fmt.Println("9 -> List the files (ls [dfsfilename])")
 		fmt.Println("10 -> Store the file in local file system")
 		input, _ := reader.ReadString('\n')
 		switch input {
@@ -186,6 +186,21 @@ func main() {
 			dfsName, _ := reader.ReadString('\n')
 			dfsName = strings.TrimRight(dfsName, "\n")
 			storeFile(local_path, dfsName)
+		case "7\n":
+			fmt.Println("Enter the DFS FileName:")
+			dfsName, _ := reader.ReadString('\n')
+			dfsName = strings.TrimRight(dfsName, "\n")
+			fetchFile(dfsName)	
+		case "8\n":
+			fmt.Println("Enter the DFS FileName:")
+			dfsName, _ := reader.ReadString('\n')
+			dfsName = strings.TrimRight(dfsName, "\n")
+			deleteFile(dfsName)	
+		case "9\n":
+			fmt.Println("Enter the DFS FileName:")
+			dfsName, _ := reader.ReadString('\n')
+			dfsName = strings.TrimRight(dfsName, "\n")
+			getFileLocations(dfsName)	
 		default:
 			fmt.Println("Invalid command")
 		}
@@ -317,14 +332,49 @@ func messageServer() {
 				infoCheck("file " + msg.File_Information.FileName + " added to " + currHost)
 			}
 		case "FileExists":
-			removeFile(msg.File_Info.Name)
+			removeFile(msg.File_Information.FileName)
 		/*	Received when a file was scp'ed and is the local file list needs to be updated. Checks first to see if file
 			already exists in local file list. If it does, do nothing. Else, add it to the list*/		
 		case "FileDoesntExist":
 			fmt.Println("File does not exist")
-			infoCheck("file " + msg.File_Info.Name + " doesn't exist")			
-		
+			infoCheck("file " + msg.File_Information.FileName + " doesn't exist")			
+		/*	Received only by the introducer. Checks if file exists. If it does, responds with file information. Else,
+			replies with 'file does not exist' message.*/
+		case "getFileLocations":
+			Message := message{"", "", "", file_information{"", nil, 0}}
+			if tgtFileInfo, exists := file_list[msg.File_Information.FileName]; exists {
+				Message = message{currHost, "sentFileLocations", time.Now().Format(time.RFC850), tgtFileInfo}
+			} else {
+				Message = message{currHost, "FileDoesntExist", time.Now().Format(time.RFC850), file_information{msg.File_Information.FileName, nil, 0}}
+			}
+			var targetHosts = make([]string, 1)
+			targetHosts[0] = msg.Host
+			sendMsg(Message, targetHosts)
+		/*	Received by the host that requested file locations if the file exists*/
+		case "sentFileLocations":
+			for _, element := range msg.File_Information.ReplicatedIPs {
+				fmt.Println(element)
+			}
+		/*	If processes that receives this message is introducer, check to see if file exists. If it does delete file
+			from file_list and send a 'DeleteFile' message to all machines that contain file. Else, reply with a
+			'file does not exist' message. If process that receives message is not introducer, delete the file*/
+		case "DeleteFile":
+			if currHost == INTRODUCER {
+				if tgtFileInfo, exists := file_list[msg.File_Information.FileName]; exists {
+					delete(file_list, msg.File_Information.FileName)
+					sendFileMetaData()
+					sendDeleteFile(tgtFileInfo)
+				} else {
+					message := message{currHost, "FileDoesntExist", time.Now().Format(time.RFC850), file_information{msg.File_Information.FileName, nil, 0}}
+					var targetHosts = make([]string, 1)
+					targetHosts[0] = msg.Host
+					sendMsg(message, targetHosts)
+				}
+			} else {
+				removeFile(msg.File_Information.FileName)
+			}	
 		}
+		
 	}
 
 }
