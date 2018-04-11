@@ -5,9 +5,9 @@ Steps to follow.
 Note: Links to distributedGrep, distributedGroupMembership can be found in my profile. 
 
 Step 1: Import all the files into 4 or more servers (Developed and tested this code on amazon EC2 instances and docker)
-Step 2: Import files from distributedGrep into the same servers under the foldername "dGrep"
+Step 2: Import files from distributedGrep into the same servers under the foldername "dGrep".
 Step 3: Open setup.config in dGrep and change the IP addresses of the instances.
-Step 4: Run the command "sh setup.sh setup.config" only on one machine. This will run server.go to receive grep requests remotely
+Step 4: Run the command "sh setup.sh setup.config" only on one machine. This will run server.go to receive grep requests remotely.
 Step 5: Goto distributedFileSystem folder and execute the command "go run main.go grepClient.go distributedFileSystem.go messages.go utilities.go introducer_reboot.go". Run this command in all the instances.
 Step 6: Make the instances join the group by selecting option 3 to be made part of the group and start with distributedFileSystem
 Step 7: Choose from the list of options to add, delete and store the file locally. DFS files will be stored in "files" folder
