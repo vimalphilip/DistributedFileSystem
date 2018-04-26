@@ -96,9 +96,71 @@ func deleteFile(dfsName string) {
 }
 
 //fetch the file and store into local directory
+/*Function to pull a file. If the machine is the introducer, it checks file_list to get an ip of a machine the file
+is replicated on, scps the file, and updates its local file list. Else, the machine sends a 'requestFile' message
+to the introducer*/
 func fetchFile(dfsName string) {
-	
+	if check_if_exists(dfsName) == 1 {
+		fmt.Println("File already exists in local 'files' directory")
+		return
+	}
+	if currHost != INTRODUCER {
+		msg := message{currHost, "requestFile", time.Now().Format(time.RFC850), file_information{dfsName, nil, 0}}
+		var targetHosts = make([]string, 1)
+		targetHosts[0] = INTRODUCER
+		sendMsg(msg, targetHosts)
+	} else {
+		if tgtFileInfo, exists := file_list[dfsName]; exists {
+			//Does not take into account if the first ip in tgtFileInfo's IP's list fails during transfer
+			go sendFile(tgtFileInfo.ReplicatedIPs[0], currHost, dfsName)
+			local_files = append(local_files, dfsName)
+			infoCheck("file " + dfsName + " fetched")
+		} else {
+			fmt.Println("File does not exist")
+		}
+	}
 }
+
+/*Check metadata with membershiplist to ensure correctness*/
+func crossCheckMD() {
+	for key, value := range file_list { //key = filename; value = filestruct
+		for index, ip := range value.ReplicatedIPs { //itererate over ips
+			exist := false
+			for _, m := range membershipList {
+				if m.Host == ip {
+					exist = true
+					break
+				}
+			}
+			if !exist {
+				new_file_ips := append(value.ReplicatedIPs[0:index], value.ReplicatedIPs[index+1:]...)
+				info := file_information{key, new_file_ips, file_list[key].Size}
+				file_list[key] = info
+				//Only replicate file again if there are < min number of replicas
+				if len(value.ReplicatedIPs) <= 4 {
+					tgtIP := membershipList[(getIndex(value.ReplicatedIPs[len(value.ReplicatedIPs)-1])+1)%len(membershipList)].Host
+					for _, srcIP := range value.ReplicatedIPs {
+						if srcIP != ip {
+							message := message{currHost, "FileSent", time.Now().Format(time.RFC850), value}
+							var targetHosts = make([]string, 1)
+							targetHosts[0] = tgtIP
+							sendMsg(message, targetHosts)
+
+							sendFile(srcIP, tgtIP, key)
+						}
+					}
+					new_file_ips = append(file_list[key].ReplicatedIPs, tgtIP)
+					info = file_information{key, new_file_ips, file_list[key].Size}
+					file_list[key] = info
+				}
+			}
+		}
+	}
+
+	sendFileMetaData()
+}
+
+
 
 
 /*Sends 'deletefile' message to all ips that have replicated the targetfile*/

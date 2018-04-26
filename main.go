@@ -15,11 +15,11 @@ import (
 )
 
 //Declare constants
-const INTRODUCER = "172.31.22.202/20"    //IP Address of the introducer
 const FILE_PATH = "MembershipList.txt"   //File path of membership list
 const MAX_TIME = time.Millisecond * 2500 //Max time a VM has to wait for the Syn/Ack message
 const MIN_HOSTS = 4                      //Minimum number of VM's in the group before Syn/Ack begins
 
+var INTRODUCER = "172.31.22.202/20"    //IP Address of the introducer
 var currHost string                    //	IP of the local machine
 var isConnected int                    //  1(Connected) or 0(Not connected) -> Boolean value to check if machine is currently connected to the group
 var membershipList = make([]member, 0) //Contains all members connected to the group
@@ -129,16 +129,16 @@ func main() {
 	// 4. Leave the group
 
 	for {
-		fmt.Println("1 -> Print membership list")
-		fmt.Println("2 -> Show IP address of this host")
-		fmt.Println("3 -> Join group")
-		fmt.Println("4 -> Leave group")
-		fmt.Println("5 -> Distributed Grep\n")
-		fmt.Println("6 -> Store the file in DFS ([localfilename] [dfsfilename])")
-		fmt.Println("7 -> Get the file (get [dfsfilename])")
-		fmt.Println("8 -> Delete the file (delete [dfsfilename])")
-		fmt.Println("9 -> List the files (ls [dfsfilename])")
-		fmt.Println("10 -> Store the file in local file system")
+		fmt.Println("1:  Print membership list")
+		fmt.Println("2:  Show IP address of this host")
+		fmt.Println("3:	 Join the group")
+		fmt.Println("4:	 Leave the group")
+		fmt.Println("5:	 Distributed Grep\n")
+		fmt.Println("6:  Add the file to DFS (<localfilename> <dfsfilename>)")
+		fmt.Println("7:  Get the file (get <dfsfilename>)")
+		fmt.Println("8:  Delete the file (delete <dfsfilename>)")
+		fmt.Println("9:  List the files (ls <dfsfilename>)")
+		fmt.Println("10: Store the file in local file system")
 		input, _ := reader.ReadString('\n')
 		switch input {
 		case "1\n":
@@ -267,10 +267,17 @@ func messageServer() {
 			//if message status is failed, propagate the message (timers will be taken care of in checkLastAck
 		case "Failed":
 			//resetTimers taken care in checkLastAck
-			//TODO check introducer is the node which left, if so choose a new introducer
-			mutex.Lock()
-			propagateMsg(msg) //Ideally the logic executed should be same as leaving
-			mutex.Unlock()
+			//mutex.Lock()
+			if propagateMsg(msg) == 1 {
+				if currHost == INTRODUCER {
+					go replicate(msg.Host)
+				}
+			}
+			INTRODUCER = membershipList[0].Host
+			if currHost == INTRODUCER {
+				go crossCheckMD()
+			}
+			//mutex.Unlock()
 		case "isAlive":
 			iamAlive()
 			/*	received by introducer. valid flags will initially contain an array of 0's corresponding to each member
@@ -372,7 +379,30 @@ func messageServer() {
 				}
 			} else {
 				removeFile(msg.File_Information.FileName)
-			}	
+			}
+		/*	Received only by the introducer. Checks if file exists: If it does, scp's file from one of the
+			machines that contains the file to the machine that requested the file. Else, replies with a file
+			does not exist message.*/
+		case "requestFile":
+			fmt.Println("File requested")
+			if tgtFileInfo, exists := file_list[msg.File_Information.FileName]; exists {
+				//Does not take into account if the first ip in tgtFileInfo's IP's list fails during transfer
+				go sendFile(tgtFileInfo.ReplicatedIPs[0], msg.Host, msg.File_Information.FileName)
+				new_file_ips := tgtFileInfo.ReplicatedIPs
+				new_file_ips = append(new_file_ips, msg.Host)
+				info := file_information{msg.File_Information.FileName, new_file_ips, tgtFileInfo.Size}
+				file_list[msg.File_Information.FileName] = info
+				message := message{currHost, "FileSent", time.Now().Format(time.RFC850), tgtFileInfo}
+				var targetHosts = make([]string, 1)
+				targetHosts[0] = msg.Host
+
+				sendMsg(message, targetHosts)
+			} else {
+				message := message{currHost, "FileDoesntExist", time.Now().Format(time.RFC850), file_information{msg.File_Information.FileName, nil, 0}}
+				var targetHosts = make([]string, 1)
+				targetHosts[0] = msg.Host
+				sendMsg(message, targetHosts)
+			}		
 		}
 		
 	}
